@@ -8,22 +8,19 @@ Comprehensive web dashboard with live candlestick charts, AI signals,
 multi-timeframe analysis, and trading controls.
 """
 
-import sys
-import json
 import logging
-import asyncio
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Dict, List, Optional, Any
+import os
+import subprocess
+import sys
 import threading
 import time
+from datetime import datetime
+from pathlib import Path
 
-from flask import Flask, render_template_string, jsonify, request, send_from_directory
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import plotly.utils
-import pandas as pd
 import numpy as np
+import pandas as pd
+from flask import Flask, render_template_string, jsonify, request, send_from_directory
+from plotly.subplots import make_subplots
 
 # Add project paths
 sys.path.append(str(Path(__file__).parent))

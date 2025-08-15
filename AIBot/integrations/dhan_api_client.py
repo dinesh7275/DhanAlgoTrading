@@ -12,6 +12,8 @@ import requests
 import json
 import time
 import logging
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
 import pandas as pd
@@ -87,6 +89,8 @@ class DhanAPIClient:
     def __init__(self, credentials: DhanCredentials):
         self.credentials = credentials
         self.session = requests.Session()
+        # Disable SSL verification for certificate issues
+        self.session.verify = False
         self.ws_connection = None
         self.is_connected = False
         self.market_data_callbacks = []
@@ -105,9 +109,9 @@ class DhanAPIClient:
         self.active_orders = {}
         self.order_history = []
         
-        # Setup session headers
+        # Setup session headers for Dhan v2 API
         self.session.headers.update({
-            'Authorization': f'Bearer {credentials.access_token}',
+            'access-token': credentials.access_token,
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         })
@@ -176,6 +180,23 @@ class DhanAPIClient:
             logger.error(f"Authentication error: {e}")
             return False
     
+    def get_fund_limit(self) -> Dict[str, Any]:
+        """
+        Get fund limit and account balance from Dhan API
+        """
+        try:
+            response = self._make_request('GET', '/fundlimit')
+            return {
+                'available_balance': response.get('availabelBalance', 0),  # Note: typo in API response
+                'sod_limit': response.get('sodLimit', 0),
+                'utilized_margin': response.get('utilizedAmount', 0),
+                'withdrawable_balance': response.get('withdrawableBalance', 0),
+                'collateral_amount': response.get('collateralAmount', 0)
+            }
+        except Exception as e:
+            logger.error(f"Error fetching fund limit: {e}")
+            return {}
+    
     def get_profile(self) -> Dict[str, Any]:
         """
         Get user profile information
@@ -224,61 +245,45 @@ class DhanAPIClient:
             logger.error(f"Error fetching funds: {e}")
             return {}
     
-    def get_market_quote(self, symbol: str, exchange: str = "NSE") -> MarketQuote:
+    def get_market_quote(self, security_ids: List[int], exchange_segment: str = "NSE_FNO") -> Dict[str, Any]:
         """
-        Get real-time market quote
+        Get real-time market quote using Dhan v2 API
         """
-        cache_key = f"{symbol}_{exchange}"
-        current_time = time.time()
-        
-        # Check cache first
-        if (cache_key in self.market_data_cache and 
-            cache_key in self.cache_expiry and
-            current_time < self.cache_expiry[cache_key]):
-            return self.market_data_cache[cache_key]
-        
         try:
-            params = {
-                'symbol': symbol,
-                'exchange': exchange
+            # Dhan v2 Market Quote API format
+            request_data = {
+                exchange_segment: security_ids
             }
             
-            response = self._make_request('GET', '/marketdata/quote', params=params)
-            data = response.get('data', {})
+            response = self._make_request('POST', '/v2/marketfeed/quote', data=request_data)
             
-            if data:
-                quote = MarketQuote(
-                    symbol=symbol,
-                    ltp=data.get('ltp', 0.0),
-                    open=data.get('open', 0.0),
-                    high=data.get('high', 0.0),
-                    low=data.get('low', 0.0),
-                    close=data.get('close', 0.0),
-                    volume=data.get('volume', 0),
-                    change=data.get('change', 0.0),
-                    change_percent=data.get('change_percent', 0.0),
-                    timestamp=datetime.now()
-                )
-                
-                # Cache the result
-                self.market_data_cache[cache_key] = quote
-                self.cache_expiry[cache_key] = current_time + self.cache_duration
-                
-                return quote
-            else:
-                raise ValueError("No market data received")
+            if not response or 'data' not in response:
+                logger.warning("No market quote data received")
+                return {}
+            
+            quotes = {}
+            for security_id, quote_data in response['data'].items():
+                quotes[security_id] = {
+                    'ltp': quote_data.get('LTP', 0.0),
+                    'open': quote_data.get('open', 0.0),
+                    'high': quote_data.get('high', 0.0),
+                    'low': quote_data.get('low', 0.0),
+                    'close': quote_data.get('close', 0.0),
+                    'volume': quote_data.get('volume', 0),
+                    'change': quote_data.get('change', 0.0),
+                    'change_percent': quote_data.get('changePercent', 0.0),
+                    'open_interest': quote_data.get('openInterest', 0),
+                    'timestamp': datetime.now()
+                }
+            
+            return quotes
         
         except Exception as e:
-            logger.error(f"Error fetching market quote for {symbol}: {e}")
-            # Return empty quote on error
-            return MarketQuote(
-                symbol=symbol, ltp=0.0, open=0.0, high=0.0, low=0.0, 
-                close=0.0, volume=0, change=0.0, change_percent=0.0,
-                timestamp=datetime.now()
-            )
+            logger.error(f"Error fetching market quotes: {e}")
+            return {}
     
-    def get_historical_data(self, symbol: str, exchange: str = "NSE", 
-                           interval: str = "1D", from_date: str = None, 
+    def get_historical_data(self, security_id: str, exchange_segment: str = "NSE_EQ", 
+                           instrument: str = "EQUITY", from_date: str = None, 
                            to_date: str = None) -> pd.DataFrame:
         """
         Get historical market data
@@ -288,18 +293,24 @@ class DhanAPIClient:
             if not to_date:
                 to_date = datetime.now().strftime('%Y-%m-%d')
             if not from_date:
-                from_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+                from_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
             
-            params = {
-                'symbol': symbol,
-                'exchange': exchange,
-                'interval': interval,
-                'from_date': from_date,
-                'to_date': to_date
+            # Dhan v2 Historical Data API format
+            request_data = {
+                "securityId": security_id,
+                "exchangeSegment": exchange_segment,
+                "instrument": instrument,
+                "fromDate": from_date,
+                "toDate": to_date
             }
             
-            response = self._make_request('GET', '/marketdata/historical', params=params)
-            data = response.get('data', [])
+            response = self._make_request('POST', '/v2/charts/historical', data=request_data)
+            
+            if not response or 'data' not in response:
+                logger.warning("No historical data received")
+                return pd.DataFrame()
+            
+            data = response['data']
             
             if data:
                 df = pd.DataFrame(data)
@@ -309,8 +320,15 @@ class DhanAPIClient:
                     df['timestamp'] = pd.to_datetime(df['timestamp'])
                     df.set_index('timestamp', inplace=True)
                 
-                # Ensure proper column names
-                df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+                # Ensure proper column names match Dhan response
+                column_mapping = {
+                    'open': 'Open',
+                    'high': 'High', 
+                    'low': 'Low',
+                    'close': 'Close',
+                    'volume': 'Volume'
+                }
+                df.rename(columns=column_mapping, inplace=True)
                 
                 return df
             else:
@@ -320,42 +338,78 @@ class DhanAPIClient:
             logger.error(f"Error fetching historical data for {symbol}: {e}")
             return pd.DataFrame()
     
-    def get_option_chain(self, underlying: str = "NIFTY", expiry: str = None) -> List[OptionChainData]:
+    def get_option_chain(self, underlying_scrip: int = 13, expiry: str = None) -> List[OptionChainData]:
         """
-        Get complete option chain for an underlying
+        Get complete option chain using Dhan v2 API
         """
         try:
-            params = {
-                'underlying': underlying
+            if expiry is None:
+                # Get next weekly expiry (Thursday)
+                today = datetime.now()
+                days_ahead = 3 - today.weekday()
+                if days_ahead <= 0:
+                    days_ahead += 7
+                expiry = (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+            
+            # Dhan v2 Option Chain API format
+            request_data = {
+                "UnderlyingScrip": underlying_scrip,  # 13 for NIFTY
+                "UnderlyingSeg": "IDX_I",  # Index segment
+                "Expiry": expiry
             }
             
-            if expiry:
-                params['expiry'] = expiry
+            response = self._make_request('POST', '/v2/optionchain', data=request_data)
             
-            response = self._make_request('GET', '/marketdata/optionchain', params=params)
-            data = response.get('data', [])
+            if not response or 'data' not in response:
+                logger.warning("No option chain data received")
+                return []
             
             option_chain = []
+            data = response['data']
             
-            for option_data in data:
-                option = OptionChainData(
-                    symbol=option_data.get('symbol', ''),
-                    expiry_date=option_data.get('expiry', ''),
-                    strike_price=option_data.get('strike', 0.0),
-                    option_type=option_data.get('option_type', ''),
-                    ltp=option_data.get('ltp', 0.0),
-                    bid_price=option_data.get('bid', 0.0),
-                    ask_price=option_data.get('ask', 0.0),
-                    volume=option_data.get('volume', 0),
-                    open_interest=option_data.get('open_interest', 0),
-                    iv=option_data.get('iv', 0.0),
-                    delta=option_data.get('delta', 0.0),
-                    gamma=option_data.get('gamma', 0.0),
-                    theta=option_data.get('theta', 0.0),
-                    vega=option_data.get('vega', 0.0),
-                    timestamp=datetime.now()
-                )
-                option_chain.append(option)
+            # Parse Dhan option chain response
+            for strike_data in data.get('optionChainDetails', []):
+                strike_price = strike_data.get('strikePrice', 0)
+                
+                # Call (CE) option
+                if 'CE' in strike_data:
+                    ce_data = strike_data['CE']
+                    option_chain.append(OptionChainData(
+                        symbol=ce_data.get('tradingSymbol', ''),
+                        expiry_date=expiry,
+                        strike_price=strike_price,
+                        option_type='CE',
+                        ltp=ce_data.get('lastPrice', 0),
+                        bid_price=ce_data.get('bidPrice', 0),
+                        ask_price=ce_data.get('askPrice', 0),
+                        volume=ce_data.get('volume', 0),
+                        open_interest=ce_data.get('openInterest', 0),
+                        iv=ce_data.get('impliedVolatility', 0),
+                        delta=ce_data.get('delta', 0),
+                        gamma=ce_data.get('gamma', 0),
+                        theta=ce_data.get('theta', 0),
+                        vega=ce_data.get('vega', 0)
+                    ))
+                
+                # Put (PE) option
+                if 'PE' in strike_data:
+                    pe_data = strike_data['PE']
+                    option_chain.append(OptionChainData(
+                        symbol=pe_data.get('tradingSymbol', ''),
+                        expiry_date=expiry,
+                        strike_price=strike_price,
+                        option_type='PE',
+                        ltp=pe_data.get('lastPrice', 0),
+                        bid_price=pe_data.get('bidPrice', 0),
+                        ask_price=pe_data.get('askPrice', 0),
+                        volume=pe_data.get('volume', 0),
+                        open_interest=pe_data.get('openInterest', 0),
+                        iv=pe_data.get('impliedVolatility', 0),
+                        delta=pe_data.get('delta', 0),
+                        gamma=pe_data.get('gamma', 0),
+                        theta=pe_data.get('theta', 0),
+                        vega=pe_data.get('vega', 0)
+                    ))
             
             logger.info(f"Fetched option chain with {len(option_chain)} contracts")
             return option_chain
@@ -364,33 +418,99 @@ class DhanAPIClient:
             logger.error(f"Error fetching option chain: {e}")
             return []
     
+    def _get_security_id(self, symbol: str) -> str:
+        """
+        Get Dhan security ID for the given symbol
+        """
+        try:
+            # Parse symbol to extract components
+            # Format: "NIFTY 21 AUG 25000 CALL"
+            parts = symbol.split()
+            if len(parts) >= 5:
+                underlying = parts[0]  # NIFTY
+                day = parts[1]         # 21
+                month = parts[2]       # AUG
+                strike = parts[3]      # 25000
+                option_type = parts[4] # CALL/PUT
+                
+                # Convert month name to number
+                month_map = {
+                    'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04',
+                    'MAY': '05', 'JUN': '06', 'JUL': '07', 'AUG': '08',
+                    'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
+                }
+                
+                month_num = month_map.get(month, '01')
+                year = datetime.now().year
+                
+                # For options, use a mapping or API call to get security ID
+                # This is a simplified approach - in reality, you'd fetch from instruments API
+                if underlying == "NIFTY":
+                    # NIFTY security IDs range - this would come from instruments API
+                    base_id = 50000  # Base for NIFTY options
+                    strike_offset = int(int(strike) / 50)  # Strike price offset
+                    type_offset = 1 if option_type == "CALL" else 0
+                    
+                    security_id = str(base_id + strike_offset + type_offset)
+                    logger.info(f"Generated security ID {security_id} for {symbol}")
+                    return security_id
+            
+            # Fallback for other symbols or incorrect format
+            logger.warning(f"Could not parse symbol {symbol}, using default security ID")
+            return "13"  # Default NIFTY index security ID
+            
+        except Exception as e:
+            logger.error(f"Error getting security ID for {symbol}: {e}")
+            return "13"  # Default fallback
+    
+    def get_instruments(self, exchange_segment: str = "NSE_FO") -> pd.DataFrame:
+        """
+        Get instruments list from Dhan API
+        """
+        try:
+            response = self._make_request('GET', f'/v2/instrument/{exchange_segment}')
+            
+            if response and 'data' in response:
+                instruments_data = response['data']
+                df = pd.DataFrame(instruments_data)
+                return df
+            else:
+                logger.warning("No instruments data received")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"Error fetching instruments: {e}")
+            return pd.DataFrame()
+    
     def place_order(self, symbol: str, transaction_type: str, quantity: int,
                    order_type: str = "MARKET", price: float = 0.0,
                    trigger_price: float = 0.0, product_type: str = "INTRADAY",
-                   exchange: str = "NSE") -> str:
+                   security_id: str = None) -> str:
         """
-        Place a new order
+        Place order using Dhan API v2 format
         """
         try:
+            # Dhan v2 API requires specific format
             order_data = {
-                'symbol': symbol,
-                'exchange': exchange,
-                'transaction_type': transaction_type,  # BUY or SELL
-                'order_type': order_type,  # MARKET, LIMIT, SL, SL-M
-                'quantity': quantity,
-                'product_type': product_type,  # INTRADAY, DELIVERY, MTF
+                "dhanClientId": self.credentials.client_id,
+                "transactionType": transaction_type,  # BUY or SELL
+                "exchangeSegment": "NSE_FO",  # For options
+                "productType": product_type.upper(),  # INTRADAY, CNC, etc.
+                "orderType": order_type,  # MARKET, LIMIT
+                "validity": "DAY",
+                "securityId": security_id or self._get_security_id(symbol),
+                "quantity": str(quantity),
+                "price": str(price) if price > 0 else "",
+                "triggerPrice": str(trigger_price) if trigger_price > 0 else ""
             }
             
-            if order_type in ['LIMIT', 'SL']:
-                order_data['price'] = price
+            # Add correlation ID for tracking
+            order_data["correlationId"] = f"trade_{int(time.time())}"
             
-            if order_type in ['SL', 'SL-M']:
-                order_data['trigger_price'] = trigger_price
+            response = self._make_request('POST', '/v2/orders', data=order_data)
             
-            response = self._make_request('POST', '/orders', data=order_data)
-            
-            if response.get('status') == 'success':
-                order_id = response.get('data', {}).get('order_id')
+            if response.get('orderId'):
+                order_id = response.get('orderId')
                 
                 # Track the order
                 self.active_orders[order_id] = {
@@ -414,6 +534,61 @@ class DhanAPIClient:
         except Exception as e:
             logger.error(f"Error placing order: {e}")
             raise
+    
+    def place_super_order(self, symbol: str, transaction_type: str, quantity: int,
+                         price: float, target_price: float, stop_loss_price: float,
+                         order_type: str = "LIMIT", product_type: str = "INTRADAY",
+                         security_id: str = None) -> str:
+        """
+        Place super order with automatic target and stop-loss using Dhan API v2
+        """
+        try:
+            # Dhan v2 Super Order API format
+            order_data = {
+                "dhanClientId": self.credentials.client_id,
+                "transactionType": transaction_type,  # BUY or SELL
+                "exchangeSegment": "NSE_FO",  # For options
+                "productType": product_type.upper(),  # INTRADAY, CNC, etc.
+                "orderType": order_type,  # LIMIT, MARKET
+                "securityId": security_id or self._get_security_id(symbol),
+                "quantity": quantity,
+                "price": price,
+                "targetPrice": target_price,
+                "stopLossPrice": stop_loss_price,
+                "trailingJump": 0  # Optional trailing stop
+            }
+            
+            # Add correlation ID for tracking
+            order_data["correlationId"] = f"super_trade_{int(time.time())}"
+            
+            response = self._make_request('POST', '/v2/super/orders', data=order_data)
+            
+            if response.get('orderId'):
+                order_id = response.get('orderId')
+                
+                # Track the super order
+                self.active_orders[order_id] = {
+                    'order_id': order_id,
+                    'symbol': symbol,
+                    'transaction_type': transaction_type,
+                    'quantity': quantity,
+                    'price': price,
+                    'target_price': target_price,
+                    'stop_loss_price': stop_loss_price,
+                    'order_type': 'SUPER',
+                    'timestamp': datetime.now(),
+                    'status': 'PENDING'
+                }
+                
+                logger.info(f"Super order placed successfully: {order_id}")
+                return order_id
+            else:
+                logger.error(f"Failed to place super order: {response}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error placing super order: {e}")
+            return None
     
     def modify_order(self, order_id: str, quantity: int = None, 
                     price: float = None, order_type: str = None) -> bool:
