@@ -1,0 +1,4 @@
+2025-08-15 14:49:55,437 - __main__ - INFO - Master Trading System initialized successfully
+2025-08-15 14:49:55,456 - __main__ - INFO - Main trading loop started
+2025-08-15 14:51:12,734 - __main__ - ERROR - Fatal system error: 'charmap' codec can't encode character '\U0001f680' in position 0: character maps to <undefined>
+2025-08-15 14:51:22,670 - __main__ - ERROR - Fatal system error: 'charmap' codec can't encode character '\U0001f680' in position 0: character maps to <undefined>
