@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fast Trading Bot Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>🚀 Fast Trading Bot Dashboard</h1>
+        <p>Real-time Algo Trading with TA-Lib Analysis</p>
+    </div>
+
+    <div class="status-bar">
+        <div class="status-item">
+            <div class="status-indicator" id="connectionStatus"></div>
+            <span>API Status: <span id="apiStatusText" class="neutral">Disconnected</span></span>
+        </div>
+        <div class="status-item">
+            <div class="status-indicator" id="botStatus"></div>
+            <span>Bot: <span id="botStatusText" class="neutral">Stopped</span></span>
+        </div>
+        <div class="status-item">
+            <span>Last Update: <span id="lastUpdate">--</span></span>
+        </div>
+    </div>
+
+    <div class="grid">
+        <!-- Add your dashboard components here -->
+        <!-- For example: API Configuration, Bot Controls, Market Data, etc. -->
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>

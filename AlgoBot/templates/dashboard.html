@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Dhan Algorithmic Trading</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">DhanAlgo Trading</div>
+            <div class="user-info">
+                <span>Welcome, {{ user.username if user else 'Demo User' }}</span>
+                <div class="user-avatar">{{ user.username[0].upper() if user else 'D' }}</div>
+                <a href="{{ url_for('logout') }}" class="btn btn-secondary">Logout</a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Navigation -->
+    <nav class="nav-bar">
+        <div class="nav-content">
+            <a href="#overview" class="nav-item active" data-view="overview">Overview</a>
+            <a href="#portfolio" class="nav-item" data-view="portfolio">Portfolio</a>
+            <a href="#trades" class="nav-item" data-view="trades">Trades</a>
+            <a href="#analytics" class="nav-item" data-view="analytics">Analytics</a>
+            <a href="#settings" class="nav-item" data-view="settings">Settings</a>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <main class="main-container">
+        <!-- Overview Section -->
+        <div id="overview-view" class="view-content">
+            <div class="dashboard-grid">
+                <!-- Portfolio Summary -->
+                <div class="card portfolio-overview">
+                    <div class="card-header">
+                        <h3 class="card-title">Portfolio Overview</h3>
+                        <button id="refresh-data" class="btn btn-primary">Refresh</button>
+                    </div>
+                    
+                    <div class="portfolio-summary">
+                        <div class="stat-card">
+                            <div class="stat-value" id="portfolio-value">₹10,000</div>
+                            <div class="stat-label">Total Value</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="total-pnl">₹0</div>
+                            <div class="stat-label">Total P&L</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="positions-count">0</div>
+                            <div class="stat-label">Open Positions</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="today-pnl">₹0</div>
+                            <div class="stat-label">Today's P&L</div>
+                        </div>
+                    </div>
+
+                    <!-- Current Positions -->
+                    <div style="margin-top: 2rem;">
+                        <h4>Current Positions</h4>
+                        <table class="positions-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Qty</th>
+                                    <th>Avg Price</th>
+                                    <th>LTP</th>
+                                    <th>P&L</th>
+                                    <th>P&L %</th>
+                                </tr>
+                            </thead>
+                            <tbody id="positions-table-body">
+                                <tr>
+                                    <td colspan="6" style="text-align: center; color: #666;">No open positions</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Trading Statistics -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Trading Statistics</h3>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="total-trades">0</div>
+                        <div class="stat-label">Total Trades</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="win-rate">0%</div>
+                        <div class="stat-label">Win Rate</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="today-trades">0</div>
+                        <div class="stat-label">Today's Trades</div>
+                    </div>
+                </div>
+
+                <!-- Market Overview -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Market Overview</h3>
+                    </div>
+                    <div class="market-data">
+                        <div class="market-item">
+                            <div class="market-symbol">NIFTY 50</div>
+                            <div class="market-price">
+                                <div id="nifty-price">25,000</div>
+                                <div id="nifty-change" class="market-change">+150 (0.6%)</div>
+                            </div>
+                        </div>
+                        <div class="market-item">
+                            <div class="market-symbol">INDIA VIX</div>
+                            <div class="market-price">
+                                <div id="vix-value">18.5</div>
+                                <div class="market-change">-0.5 (-2.6%)</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 1rem;">
+                        <div class="market-item">
+                            <span>Market Status:</span>
+                            <span id="market-status" class="status status-active">OPEN</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Trading Controls -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Trading Controls</h3>
+                    </div>
+                    <div style="display: flex; gap: 1rem; margin-bottom: 1rem;">
+                        <button id="start-trading" class="btn btn-success">Start Trading</button>
+                        <button id="stop-trading" class="btn btn-danger" disabled>Stop Trading</button>
+                    </div>
+                    <div>
+                        <label>
+                            <input type="checkbox" id="auto-refresh" checked> Auto Refresh
+                        </label>
+                    </div>
+                    <div style="margin-top: 1rem;">
+                        <div>System Status: <span id="system-status" class="status status-active">ACTIVE</span></div>
+                    </div>
+                </div>
+
+                <!-- AI Signals -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">AI Trading Signals</h3>
+                    </div>
+                    <div class="signal-indicator signal-hold">HOLD</div>
+                    <div>Confidence: 65%</div>
+                    <div class="confidence-bar">
+                        <div class="confidence-fill" style="width: 65%;"></div>
+                    </div>
+                    <div style="margin-top: 1rem; font-size: 0.9rem; color: #666;">
+                        Market analysis in progress...
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Trades -->
+            <div class="card" style="margin-top: 2rem;">
+                <div class="card-header">
+                    <h3 class="card-title">Recent Trades</h3>
+                    <a href="#trades" class="btn btn-primary" data-view="trades">View All</a>
+                </div>
+                <table class="positions-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Symbol</th>
+                            <th>Action</th>
+                            <th>Qty</th>
+                            <th>Price</th>
+                            <th>P&L</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trades-table-body">
+                        <tr>
+                            <td colspan="7" style="text-align: center; color: #666;">No recent trades</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Portfolio Section -->
+        <div id="portfolio-view" class="view-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Portfolio Details</h3>
+                </div>
+                <p>Portfolio details view - Implementation in progress</p>
+            </div>
+        </div>
+
+        <!-- Trades Section -->
+        <div id="trades-view" class="view-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Trading History</h3>
+                </div>
+                <p>Trading history view - Implementation in progress</p>
+            </div>
+        </div>
+
+        <!-- Analytics Section -->
+        <div id="analytics-view" class="view-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Trading Analytics</h3>
+                </div>
+                <p>Analytics view - Implementation in progress</p>
+            </div>
+        </div>
+
+        <!-- Settings Section -->
+        <div id="settings-view" class="view-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Trading Settings</h3>
+                </div>
+                <form id="settings-form">
+                    <div class="form-group">
+                        <label>Initial Capital (₹)</label>
+                        <input type="number" name="initial_capital" value="10000" min="1000" step="1000">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Daily Loss (%)</label>
+                        <input type="number" name="max_daily_loss" value="10" min="1" max="50" step="1">
+                    </div>
+                    <div class="form-group">
+                        <label>Daily Profit Target (%)</label>
+                        <input type="number" name="daily_profit_target" value="10" min="1" max="50" step="1">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Trades Per Day</label>
+                        <input type="number" name="max_trades_per_day" value="10" min="1" max="100" step="1">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Save Settings</button>
+                </form>
+            </div>
+        </div>
+    </main>
+
+    <!-- Notifications Container -->
+    <div id="notifications-container" class="notifications-container"></div>
+
+    <!-- Scripts -->
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>
