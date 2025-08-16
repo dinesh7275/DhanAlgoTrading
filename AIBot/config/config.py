@@ -6,10 +6,15 @@ Copy this file to config.py and update with your actual values
 """
 
 # API Configuration
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 API_KEYS = {
-    'dhan_api_key': 'your_dhan_api_key_here',
-    'dhan_access_token': 'your_dhan_access_token_here',
-    'alpha_vantage_key': 'your_alpha_vantage_key_here',  # Optional
+    'dhan_client_id': os.getenv('DHAN_CLIENT_ID', 'your_client_id_here'),
+    'dhan_access_token': os.getenv('DHAN_ACCESS_TOKEN', 'your_access_token_here'),
+    'alpha_vantage_key': os.getenv('ALPHA_VANTAGE_KEY', 'your_alpha_vantage_key_here'),
 }
 
 # Trading Configuration

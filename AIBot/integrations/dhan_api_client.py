@@ -112,6 +112,7 @@ class DhanAPIClient:
         # Setup session headers for Dhan v2 API
         self.session.headers.update({
             'access-token': credentials.access_token,
+            'client-id': credentials.client_id,
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         })
@@ -131,11 +132,21 @@ class DhanAPIClient:
     def _make_request(self, method: str, endpoint: str, params: Dict = None, 
                      data: Dict = None) -> Dict[str, Any]:
         """
-        Make API request with error handling and rate limiting
+        Make API request with detailed logging and error handling
         """
         self._rate_limit_check()
         
         url = f"{self.credentials.base_url}{endpoint}"
+        
+        # Log request details
+        logger.info(f"=== DHAN API REQUEST ===")
+        logger.info(f"Method: {method.upper()}")
+        logger.info(f"URL: {url}")
+        logger.info(f"Headers: {dict(self.session.headers)}")
+        if params:
+            logger.info(f"Params: {params}")
+        if data:
+            logger.info(f"Payload: {json.dumps(data, indent=2)}")
         
         try:
             if method.upper() == 'GET':
@@ -149,15 +160,28 @@ class DhanAPIClient:
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
             
+            # Log response details
+            logger.info(f"=== DHAN API RESPONSE ===")
+            logger.info(f"Status Code: {response.status_code}")
+            logger.info(f"Response Headers: {dict(response.headers)}")
+            logger.info(f"Response Text: {response.text[:500]}...")  # First 500 chars
+            
             response.raise_for_status()
             
-            return response.json()
+            response_json = response.json()
+            logger.info(f"Response JSON Keys: {list(response_json.keys()) if isinstance(response_json, dict) else 'Not a dict'}")
+            
+            return response_json
         
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP Error {response.status_code}: {response.text}")
+            raise
         except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed: {e}")
+            logger.error(f"Request Error: {e}")
             raise
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to decode JSON response: {e}")
+            logger.error(f"JSON Decode Error: {e}")
+            logger.error(f"Raw response: {response.text}")
             raise
     
     def authenticate(self) -> bool:
@@ -168,12 +192,13 @@ class DhanAPIClient:
             # Test authentication with profile endpoint
             response = self._make_request('GET', '/profile')
             
-            if response.get('status') == 'success':
+            # Check if we got a valid response with client ID
+            if response and 'dhanClientId' in response:
                 self.is_connected = True
-                logger.info("Successfully authenticated with Dhan API")
+                logger.info(f"Successfully authenticated with Dhan API - Client ID: {response['dhanClientId']}")
                 return True
             else:
-                logger.error("Authentication failed")
+                logger.error("Authentication failed - Invalid response format")
                 return False
         
         except Exception as e:
@@ -203,7 +228,7 @@ class DhanAPIClient:
         """
         try:
             response = self._make_request('GET', '/profile')
-            return response.get('data', {})
+            return response if response else {}
         
         except Exception as e:
             logger.error(f"Error fetching profile: {e}")
@@ -227,7 +252,8 @@ class DhanAPIClient:
         """
         try:
             response = self._make_request('GET', '/positions')
-            return response.get('data', [])
+            # Dhan returns positions as a list directly, not wrapped in 'data'
+            return response if isinstance(response, list) else []
         
         except Exception as e:
             logger.error(f"Error fetching positions: {e}")
@@ -338,23 +364,53 @@ class DhanAPIClient:
             logger.error(f"Error fetching historical data for {symbol}: {e}")
             return pd.DataFrame()
     
-    def get_option_chain(self, underlying_scrip: int = 13, expiry: str = None) -> List[OptionChainData]:
+    def get_option_chain_expiry_list(self, underlying_scrip: int = 13, underlying_seg: str = "IDX_I") -> List[str]:
+        """
+        Get list of available expiries for option chain using Dhan v2 API
+        """
+        try:
+            # Dhan v2 Option Chain Expiry List API format
+            request_data = {
+                "UnderlyingScrip": underlying_scrip,  # 13 for NIFTY
+                "UnderlyingSeg": underlying_seg  # IDX_I for Index segment
+            }
+            
+            response = self._make_request('POST', '/v2/optionchain/expirylist', data=request_data)
+            
+            if response and 'data' in response:
+                expiry_list = response['data']
+                logger.info(f"Found {len(expiry_list)} expiries for underlying {underlying_scrip}")
+                return expiry_list
+            else:
+                logger.warning("No expiry list data received")
+                return []
+        
+        except Exception as e:
+            logger.error(f"Error fetching option chain expiry list: {e}")
+            return []
+    
+    def get_option_chain(self, underlying_scrip: int = 13, underlying_seg: str = "IDX_I", expiry: str = None) -> List[OptionChainData]:
         """
         Get complete option chain using Dhan v2 API
         """
         try:
+            # If no expiry provided, get the first available expiry
             if expiry is None:
-                # Get next weekly expiry (Thursday)
-                today = datetime.now()
-                days_ahead = 3 - today.weekday()
-                if days_ahead <= 0:
-                    days_ahead += 7
-                expiry = (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+                expiry_list = self.get_option_chain_expiry_list(underlying_scrip, underlying_seg)
+                if expiry_list:
+                    expiry = expiry_list[0]  # Use first available expiry
+                else:
+                    # Fallback to next Thursday
+                    today = datetime.now()
+                    days_ahead = 3 - today.weekday()
+                    if days_ahead <= 0:
+                        days_ahead += 7
+                    expiry = (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
             
             # Dhan v2 Option Chain API format
             request_data = {
                 "UnderlyingScrip": underlying_scrip,  # 13 for NIFTY
-                "UnderlyingSeg": "IDX_I",  # Index segment
+                "UnderlyingSeg": underlying_seg,  # IDX_I for Index segment
                 "Expiry": expiry
             }
             
@@ -367,48 +423,57 @@ class DhanAPIClient:
             option_chain = []
             data = response['data']
             
-            # Parse Dhan option chain response
-            for strike_data in data.get('optionChainDetails', []):
-                strike_price = strike_data.get('strikePrice', 0)
+            # Parse Dhan option chain response - new structure
+            # Response has structure: {"data": {"last_price": X, "oc": {"strike1": {"ce": {...}, "pe": {...}}, ...}}}
+            option_contracts = data.get('oc', {})
+            
+            for strike_str, strike_data in option_contracts.items():
+                strike_price = float(strike_str)
                 
                 # Call (CE) option
-                if 'CE' in strike_data:
-                    ce_data = strike_data['CE']
+                if 'ce' in strike_data:
+                    ce_data = strike_data['ce']
+                    greeks = ce_data.get('greeks', {})
+                    
                     option_chain.append(OptionChainData(
-                        symbol=ce_data.get('tradingSymbol', ''),
+                        symbol=f"NIFTY{expiry.replace('-', '')}{int(strike_price)}CE",  # Generate symbol
                         expiry_date=expiry,
                         strike_price=strike_price,
                         option_type='CE',
-                        ltp=ce_data.get('lastPrice', 0),
-                        bid_price=ce_data.get('bidPrice', 0),
-                        ask_price=ce_data.get('askPrice', 0),
+                        ltp=ce_data.get('last_price', 0),
+                        bid_price=ce_data.get('top_bid_price', 0),
+                        ask_price=ce_data.get('top_ask_price', 0),
                         volume=ce_data.get('volume', 0),
-                        open_interest=ce_data.get('openInterest', 0),
-                        iv=ce_data.get('impliedVolatility', 0),
-                        delta=ce_data.get('delta', 0),
-                        gamma=ce_data.get('gamma', 0),
-                        theta=ce_data.get('theta', 0),
-                        vega=ce_data.get('vega', 0)
+                        open_interest=ce_data.get('oi', 0),
+                        iv=ce_data.get('implied_volatility', 0),
+                        delta=greeks.get('delta', 0),
+                        gamma=greeks.get('gamma', 0),
+                        theta=greeks.get('theta', 0),
+                        vega=greeks.get('vega', 0),
+                        timestamp=datetime.now()
                     ))
                 
                 # Put (PE) option
-                if 'PE' in strike_data:
-                    pe_data = strike_data['PE']
+                if 'pe' in strike_data:
+                    pe_data = strike_data['pe']
+                    greeks = pe_data.get('greeks', {})
+                    
                     option_chain.append(OptionChainData(
-                        symbol=pe_data.get('tradingSymbol', ''),
+                        symbol=f"NIFTY{expiry.replace('-', '')}{int(strike_price)}PE",  # Generate symbol
                         expiry_date=expiry,
                         strike_price=strike_price,
                         option_type='PE',
-                        ltp=pe_data.get('lastPrice', 0),
-                        bid_price=pe_data.get('bidPrice', 0),
-                        ask_price=pe_data.get('askPrice', 0),
+                        ltp=pe_data.get('last_price', 0),
+                        bid_price=pe_data.get('top_bid_price', 0),
+                        ask_price=pe_data.get('top_ask_price', 0),
                         volume=pe_data.get('volume', 0),
-                        open_interest=pe_data.get('openInterest', 0),
-                        iv=pe_data.get('impliedVolatility', 0),
-                        delta=pe_data.get('delta', 0),
-                        gamma=pe_data.get('gamma', 0),
-                        theta=pe_data.get('theta', 0),
-                        vega=pe_data.get('vega', 0)
+                        open_interest=pe_data.get('oi', 0),
+                        iv=pe_data.get('implied_volatility', 0),
+                        delta=greeks.get('delta', 0),
+                        gamma=greeks.get('gamma', 0),
+                        theta=greeks.get('theta', 0),
+                        vega=greeks.get('vega', 0),
+                        timestamp=datetime.now()
                     ))
             
             logger.info(f"Fetched option chain with {len(option_chain)} contracts")
