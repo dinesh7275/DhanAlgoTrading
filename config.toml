@@ -1,0 +1,83 @@
+# Paper-trading configuration. Every value here is read by algotrader/config.py.
+# Money is in rupees, percentages are plain numbers (20 = 20%), times are IST.
+
+[account]
+starting_capital = 25000
+
+[instrument]
+underlying = "NIFTY"
+lots = 1                    # hard limit: the app refuses to start with anything else
+strike_step = 50
+fallback_lot_size = 65      # used only when Dhan's instrument file can't be downloaded
+fallback_expiry_weekday = 1 # 0=Mon, 1=Tue; used only when the instrument file is unavailable
+avoid_expiry_day = true     # trade the next expiry on expiry day (0DTE premiums swing wildly)
+use_instrument_master = true
+
+[data]
+# "yahoo": NIFTY spot from Yahoo, option premiums modelled with Black-Scholes using India VIX.
+#          Free, no account needed, but premiums are an approximation.
+# "dhan":  real option-chain bid/ask from Dhan (read-only). Needs DHAN_CLIENT_ID and
+#          DHAN_ACCESS_TOKEN in .env and a Dhan Data API subscription.
+provider = "yahoo"
+poll_seconds = 30
+max_staleness_minutes = 10
+risk_free_rate = 6.5
+holidays = []               # NSE holidays as "YYYY-MM-DD"; the engine stays idle on these days
+
+[strategy]
+# Strategies to run, in priority order (if two signal on the same candle, the first wins).
+# Only one position is open at a time, and [risk] limits apply across all of them.
+#   "orb"      - 15-minute opening range breakout (trend days)
+#   "prev_day" - breakout of the previous day's high/low (trend days)
+#   "reversal" - fade the edge of a tight sideways range (range days)
+enabled = ["orb", "prev_day"]   # "reversal" lost money in backtests; see README
+candle_minutes = 5
+no_entry_after = "14:30"
+
+[strategy.orb]
+range_minutes = 15
+min_range_pct = 0.10        # skip days whose opening range is too tight to mean anything...
+max_range_pct = 0.80        # ...or so wide the move already happened
+stop_loss_pct = 20          # on option premium
+target_pct = 40             # on option premium (2:1 reward/risk)
+max_hold_minutes = 0        # 0 = hold until stop, target or square-off
+
+[strategy.prev_day]
+start_after_minutes = 15    # ignore crosses during the opening noise
+stop_loss_pct = 20
+target_pct = 40
+max_hold_minutes = 0
+
+[strategy.reversal]
+earliest = "10:15"          # the day needs time to form a range first
+lookback_candles = 12       # range = the previous hour of 5m candles
+min_range_pct = 0.15        # range must be wide enough for the target to be reachable...
+max_range_pct = 0.40        # ...and tight enough to count as sideways
+stop_loss_pct = 10          # smaller moves, so tighter exits
+target_pct = 15
+max_hold_minutes = 45       # if the reversal hasn't happened by then, get out
+
+[risk]
+max_trades_per_day = 2
+max_daily_loss = 2500
+max_consecutive_losses = 2
+square_off_time = "15:15"
+
+[execution]
+spread_pct = 0.6            # simulated bid-ask spread as % of premium (model-priced data only)
+slippage_ticks = 1          # extra ticks paid on every simulated fill
+tick_size = 0.05
+
+[costs]                     # Indian options charges, applied to every simulated fill
+brokerage_per_order = 20.0
+stt_sell_pct = 0.1          # on sell-side premium
+exchange_txn_pct = 0.03503  # NSE options transaction charge
+sebi_per_crore = 10.0
+stamp_buy_pct = 0.003       # on buy-side premium
+gst_pct = 18.0              # on brokerage + exchange + SEBI charges
+
+[go_live]                   # the report checks paper results against these before you risk real money
+min_trades = 50
+min_trading_days = 30
+min_profit_factor = 1.3
+max_drawdown_pct = 15
